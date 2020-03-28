@@ -6,12 +6,12 @@ import (
 	"image/png"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gen2brain/go-fitz"
+	"github.com/markbates/pkger"
 )
 
 // ConvertToPptx converts src to pptx and saves in dest
@@ -28,8 +28,9 @@ func ConvertToPptx(src, dest string) error {
 	if err != nil {
 		return err
 	}
+	defer os.RemoveAll(tempDir)
 
-	if err := CopyDirectory(tempDir); err != nil {
+	if err := exportTemplate(tempDir); err != nil {
 		return fmt.Errorf("Couldn't copy template: %w", err)
 	}
 
@@ -143,7 +144,7 @@ func genPresentationXML(pname string, num int) error {
 
 func cpSlides(pname string, num int) error {
 	for i := num - 1; i >= 0; i-- {
-		Copy(pname+"/ppt/slides/slide1.xml", pname+fmt.Sprintf("/ppt/slides/slide-%d.xml", i))
+		copyFile(pname+"/ppt/slides/slide1.xml", pname+fmt.Sprintf("/ppt/slides/slide-%d.xml", i))
 		f, err := os.Create(pname + fmt.Sprintf("/ppt/slides/_rels/slide-%d.xml.rels", i))
 		if err != nil {
 			return err
@@ -176,16 +177,13 @@ func zipit(source, target string) error {
 	archive := zip.NewWriter(zipfile)
 	defer archive.Close()
 
-	base := filepath.Base(source)
-	log.Printf("Base: %s", base)
-
 	err = filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if info.IsDir() {
-			log.Printf("walking dir: %s", path)
+			// log.Printf("walking dir: %s", path)
 			if source == path {
 				return nil
 			}
@@ -200,12 +198,8 @@ func zipit(source, target string) error {
 		header.Method = zip.Deflate
 
 		writer, err := archive.CreateHeader(header)
-		if err != nil {
+		if err != nil || info.IsDir() {
 			return err
-		}
-
-		if info.IsDir() {
-			return nil
 		}
 
 		file, err := os.Open(path)
@@ -253,4 +247,58 @@ func extractImages(docu, path string) (int, error) {
 		f.Close()
 	}
 	return doc.NumPage(), nil
+}
+
+func exportTemplate(dest string) error {
+	return pkger.Walk("/pptxTemplate", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		pp := strings.Split(path, ":")[1]
+		if pp == "/pptxTemplate" {
+			return nil
+		}
+		pp = strings.Replace(pp, "/pptxTemplate", "/", 1)
+		if info.IsDir() {
+			err := os.Mkdir(filepath.Join(dest, pp), info.Mode().Perm())
+			if err != nil {
+				return err
+			}
+		} else {
+			f, err := pkger.Open(path)
+			if err != nil {
+				return fmt.Errorf("Couldn'd open %s: %w", path, err)
+			}
+			d, err := os.Create(filepath.Join(dest, pp))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(d, f); err != nil {
+				return err
+			}
+			if err := f.Close(); err != nil {
+				return err
+			}
+			if err := d.Close(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func copyFile(srcFile, dstFile string) (int64, error) {
+	out, err := os.Create(dstFile)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+
+	in, err := os.Open(srcFile)
+	if err != nil {
+		return 0, err
+	}
+	defer in.Close()
+
+	return io.Copy(out, in)
 }
